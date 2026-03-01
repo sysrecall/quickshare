@@ -1,9 +1,19 @@
 use actix_files::NamedFile;
-use actix_web::http::header::{self, ContentDisposition, DispositionParam, DispositionType};
+use actix_web::cookie::time::error::Format;
+use actix_web::http::header::{ContentDisposition, DispositionParam, DispositionType};
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Result, web};
+use get_if_addrs::get_if_addrs;
+use image::Luma;
+use mdns_sd::{ServiceDaemon, ServiceInfo};
+use qrcode::{EcLevel, QrCode, Version};
+use rand::RngExt;
+use rand::distr::Alphanumeric;
 use std::collections::HashMap;
-use std::env;
+use std::net::{Ipv4Addr, UdpSocket};
 use std::path::PathBuf;
+use std::time::Duration;
+use std::{env, thread};
+use win_open;
 
 type FileMap = HashMap<String, PathBuf>;
 
@@ -66,6 +76,15 @@ async fn download_file(
     Ok(named.into_response(&req))
 }
 
+fn get_local_ip() -> Option<String> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    match socket.local_addr() {
+        Ok(addr) => Some(addr.ip().to_string()),
+        Err(_) => None,
+    }
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let mut files = FileMap::new();
@@ -78,8 +97,13 @@ async fn main() -> std::io::Result<()> {
             continue;
         }
 
-        let id = format!("file{}", idx);
-        files.insert(id, path);
+        let file_name: String = rand::rng()
+            .sample_iter(&Alphanumeric)
+            .take(12)
+            .map(char::from)
+            .collect();
+
+        files.insert(file_name, path);
     }
 
     if files.is_empty() {
@@ -87,20 +111,53 @@ async fn main() -> std::io::Result<()> {
         std::process::exit(1);
     }
 
-    // files.insert(
-    //     "dep".into(),
-    //     PathBuf::from(r#"E:\projects\rust\quickshare\Cargo.toml"#),
-    // );
+    const PORT: u16 = 3000;
+
+    let local_ip = get_local_ip().unwrap();
+
+    let root_address = format!("http://{}:{}", local_ip, PORT);
+
+    println!("Root: {}", root_address);
+
+    let code = match files.len() {
+        1 => {
+            let (name, _) = files.iter().next().unwrap();
+            let address = format!("{}/{}", root_address, name);
+            println!("Address: {}", address);
+            QrCode::new(address.as_bytes()).unwrap()
+        }
+        _ => QrCode::new(root_address.as_bytes()).unwrap(),
+    };
+
+    let image = code.render::<Luma<u8>>().build();
+
+    let mut qr_location = env::temp_dir();
+
+    let file_name: String = rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(12)
+        .map(char::from)
+        .collect();
+
+    let file_name = format!("{}.png", file_name);
+
+    qr_location.push(file_name);
+
+    println!("QR Code Location: {:?}", qr_location.display());
+
+    image.save(&qr_location).unwrap();
+
+    win_open::that(&qr_location).expect("Unable to open qr image!");
 
     let app_state = web::Data::new(files);
 
-    println!("Starting server at: 127.0.0.1:3000");
+    println!("Starting server at: {}", root_address);
 
     HttpServer::new(move || {
         App::new()
             .app_data(app_state.clone())
-            .route("/files", web::get().to(list_files))
-            .route("/files/{id}", web::get().to(download_file))
+            .route("/", web::get().to(list_files))
+            .route("/{id}", web::get().to(download_file))
     })
     .bind(("0.0.0.0", 3000))?
     .run()
