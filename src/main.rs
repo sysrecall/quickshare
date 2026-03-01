@@ -1,76 +1,11 @@
-use actix_files::NamedFile;
-use actix_web::http::header::{ContentDisposition, DispositionParam, DispositionType};
-use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Result, web};
-use image::Luma;
-use qrcode::QrCode;
-use rand::RngExt;
-use rand::distr::Alphanumeric;
-use std::collections::HashMap;
 use std::env;
 use std::net::UdpSocket;
 use std::path::PathBuf;
-use win_open;
 
-type FileMap = HashMap<String, PathBuf>;
+use crate::{qrgen::QrGen, server::FileServer};
 
-async fn list_files(files: web::Data<FileMap>) -> HttpResponse {
-    let mut body = String::from(
-        "<!doctype html>
-        <html>
-        <head>
-            <meta charset='utf-8'>
-            <title>QuickShare</title>
-            <style>
-                body { font-family: sans-serif; padding: 20px; }
-                ul { list-style: none; padding: 0; }
-                li { margin: 8px 0; }
-            </style>
-        </head>
-        <body>
-            <h1>Shared files</h1>
-            <ul>",
-    );
-
-    for (id, file) in files.iter() {
-        let name = file.file_name().unwrap_or_default().to_string_lossy();
-
-        body.push_str(&format!("<li><a href=\"/{}\">{}</a></li>", id, name));
-    }
-
-    body.push_str("</ul></body></html>");
-
-    HttpResponse::Ok()
-        .content_type("text/html; charset=utf-8")
-        .body(body)
-}
-
-async fn download_file(
-    req: HttpRequest,
-    file_id: web::Path<String>,
-    files: web::Data<FileMap>,
-) -> Result<HttpResponse> {
-    let id = file_id.into_inner();
-
-    let file = match files.get(&id) {
-        Some(f) => f,
-        None => return Ok(HttpResponse::NotFound().finish()),
-    };
-
-    let filename = file
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-
-    let named = NamedFile::open(&file)?
-        .set_content_disposition(ContentDisposition {
-            disposition: DispositionType::Attachment,
-            parameters: vec![DispositionParam::Filename(filename)],
-        })
-        .use_last_modified(false);
-
-    Ok(named.into_response(&req))
-}
+mod qrgen;
+mod server;
 
 fn get_local_ip() -> Option<String> {
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
@@ -82,10 +17,12 @@ fn get_local_ip() -> Option<String> {
 }
 
 #[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    let mut files = FileMap::new();
+async fn main() {
+    // Get files from the args
+    let n = env::args().len();
+    let mut file_names: Vec<PathBuf> = Vec::with_capacity(n);
 
-    for (idx, arg) in env::args().skip(1).enumerate() {
+    for arg in env::args().skip(1) {
         let path = PathBuf::from(&arg);
 
         if !path.exists() {
@@ -93,69 +30,37 @@ async fn main() -> std::io::Result<()> {
             continue;
         }
 
-        let file_name: String = rand::rng()
-            .sample_iter(&Alphanumeric)
-            .take(12)
-            .map(char::from)
-            .collect();
-
-        files.insert(file_name, path);
+        file_names.push(path);
     }
 
-    if files.is_empty() {
+    if file_names.is_empty() {
         eprintln!("No files provided.");
         std::process::exit(1);
     }
 
+    // setup server config
     const PORT: u16 = 3000;
 
-    let local_ip = get_local_ip().unwrap();
+    let mut server = FileServer::new(file_names, PORT);
 
-    let root_address = format!("http://{}:{}", local_ip, PORT);
+    let root_address = get_local_ip().unwrap();
 
-    println!("Root: {}", root_address);
-
-    let code = match files.len() {
+    // generate qr code
+    let mut qrgen = match server.files.len() {
         1 => {
-            let (name, _) = files.iter().next().unwrap();
-            let address = format!("{}/{}", root_address, name);
+            let (name, _) = server.files.iter().next().unwrap();
+            let address = format!("{}:{}/{}", root_address, PORT, name);
             println!("Address: {}", address);
-            QrCode::new(address.as_bytes()).unwrap()
+            QrGen::create(address.as_ref()).unwrap()
+            // QrCode::new(address.as_bytes()).unwrap()
         }
-        _ => QrCode::new(root_address.as_bytes()).unwrap(),
+        _ => QrGen::create(root_address.as_ref()).unwrap(),
     };
 
-    let image = code.render::<Luma<u8>>().build();
+    qrgen.generate_image();
+    qrgen.show();
 
-    let mut qr_location = env::temp_dir();
-
-    let file_name: String = rand::rng()
-        .sample_iter(&Alphanumeric)
-        .take(12)
-        .map(char::from)
-        .collect();
-
-    let file_name = format!("{}.png", file_name);
-
-    qr_location.push(file_name);
-
-    println!("QR Code Location: {:?}", qr_location.display());
-
-    image.save(&qr_location).unwrap();
-
-    win_open::that(&qr_location).expect("Unable to open qr image!");
-
-    let app_state = web::Data::new(files);
-
-    println!("Starting server at: {}", root_address);
-
-    HttpServer::new(move || {
-        App::new()
-            .app_data(app_state.clone())
-            .route("/", web::get().to(list_files))
-            .route("/{id}", web::get().to(download_file))
-    })
-    .bind(("0.0.0.0", 3000))?
-    .run()
-    .await
+    // start server
+    println!("Starting server at: {}:{}", root_address, PORT);
+    server.start().await.unwrap();
 }
