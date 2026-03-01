@@ -1,18 +1,14 @@
 use actix_files::NamedFile;
-use actix_web::cookie::time::error::Format;
 use actix_web::http::header::{ContentDisposition, DispositionParam, DispositionType};
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Result, web};
-use get_if_addrs::get_if_addrs;
 use image::Luma;
-use mdns_sd::{ServiceDaemon, ServiceInfo};
-use qrcode::{EcLevel, QrCode, Version};
+use qrcode::QrCode;
 use rand::RngExt;
 use rand::distr::Alphanumeric;
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, UdpSocket};
+use std::env;
+use std::net::UdpSocket;
 use std::path::PathBuf;
-use std::time::Duration;
-use std::{env, thread};
 use win_open;
 
 type FileMap = HashMap<String, PathBuf>;
@@ -38,7 +34,7 @@ async fn list_files(files: web::Data<FileMap>) -> HttpResponse {
     for (id, file) in files.iter() {
         let name = file.file_name().unwrap_or_default().to_string_lossy();
 
-        body.push_str(&format!("<li><a href=\"/files/{}\">{}</a></li>", id, name));
+        body.push_str(&format!("<li><a href=\"/{}\">{}</a></li>", id, name));
     }
 
     body.push_str("</ul></body></html>");
