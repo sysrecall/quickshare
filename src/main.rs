@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use std::net::UdpSocket;
 use std::path::PathBuf;
 use std::{env, sync::mpsc::channel};
@@ -44,9 +46,7 @@ async fn main() {
 
     // setup server config
     const PORT: u16 = 3000;
-
     let mut server = FileServer::new(file_names, PORT);
-
     let root_address = get_local_ip().unwrap();
 
     // generate qr code
@@ -64,6 +64,7 @@ async fn main() {
     println!("Starting server at: {}:{}", root_address, PORT);
     server.start(r_should_stop).unwrap();
 
+    // generate and show qr
     qrgen.generate_image();
     qrgen.show(s_should_stop).unwrap();
 }

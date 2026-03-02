@@ -12,3 +12,9 @@ image = "0.25.9"
 rand = "0.10.0"
 show-image = "0.14.1"
 actix-rt = "2.11.0"
+
+
+[[bin]]
+name = "quickshare"
+path = "src/main.rs"
+windows_subsystem = "windows"
