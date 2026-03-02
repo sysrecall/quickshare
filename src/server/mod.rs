@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::mpsc::Receiver};
 
 use actix_files::NamedFile;
 use actix_web::{
@@ -41,19 +41,26 @@ impl FileServer {
         }
     }
 
-    pub async fn start(&mut self) -> std::io::Result<()> {
+    pub async fn start(&mut self, r_should_stop: Receiver<bool>) -> std::io::Result<()> {
         let app_state = web::Data::new(self.files.clone());
 
         let server = HttpServer::new(move || {
             App::new()
-                .app_data(app_state.to_owned())
+                .app_data(app_state.clone())
                 .route("/", web::get().to(list_files))
                 .route("/{id}", web::get().to(download_file))
         })
         .bind(("0.0.0.0", 3000))?
         .run();
 
-        self.handle = Some(server.handle());
+        let handle = server.handle();
+        self.handle = Some(handle.clone());
+
+        actix_rt::spawn(async move {
+            if let Ok(graceful) = r_should_stop.recv() {
+                handle.stop(graceful).await;
+            }
+        });
 
         server.await
     }

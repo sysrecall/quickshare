@@ -1,8 +1,10 @@
-use std::env;
 use std::net::UdpSocket;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::{env, sync::mpsc::channel};
 
 use crate::{qrgen::QrGen, server::FileServer};
+use show_image::{ImageInfo, ImageView, create_window};
 
 mod qrgen;
 mod server;
@@ -17,6 +19,7 @@ fn get_local_ip() -> Option<String> {
 }
 
 #[actix_web::main]
+#[show_image::main]
 async fn main() {
     // Get files from the args
     let n = env::args().len();
@@ -38,6 +41,9 @@ async fn main() {
         std::process::exit(1);
     }
 
+    // setup channel
+    let (s_should_stop, r_should_stop) = channel::<bool>();
+
     // setup server config
     const PORT: u16 = 3000;
 
@@ -52,15 +58,14 @@ async fn main() {
             let address = format!("{}:{}/{}", root_address, PORT, name);
             println!("Address: {}", address);
             QrGen::create(address.as_ref()).unwrap()
-            // QrCode::new(address.as_bytes()).unwrap()
         }
         _ => QrGen::create(root_address.as_ref()).unwrap(),
     };
 
     qrgen.generate_image();
-    qrgen.show();
+    qrgen.show(s_should_stop).unwrap();
 
     // start server
     println!("Starting server at: {}:{}", root_address, PORT);
-    server.start().await.unwrap();
+    server.start(r_should_stop).await.unwrap();
 }
