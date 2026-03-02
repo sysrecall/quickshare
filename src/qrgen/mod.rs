@@ -3,7 +3,7 @@ use std::{env, path::PathBuf, sync::mpsc::Sender};
 use image::{ImageReader, Luma};
 use qrcode::{QrCode, types::QrError};
 use rand::{RngExt, distr::Alphanumeric};
-use show_image::{ImageInfo, ImageView, create_window};
+use show_image::{ImageInfo, ImageView, WindowOptions, create_window};
 
 pub struct QrGen {
     code: QrCode,
@@ -47,25 +47,31 @@ impl QrGen {
             let img = ImageReader::open(location)?.decode()?.to_rgb8();
 
             let (width, height) = img.dimensions();
+
             let image_view = ImageView::new(ImageInfo::rgb8(width, height), img.as_raw());
 
-            let window = create_window("QuickShare", Default::default())?;
+            let options = WindowOptions::default()
+                .set_size([width, height])
+                .set_preserve_aspect_ratio(true);
+            let window = create_window("QuickShare", options)?;
             window.set_image("QuickShare", image_view)?;
 
-            // close on escape
+            // close on escape or close button
             for event in window.event_channel()? {
-                match event {
-                    show_image::event::WindowEvent::CloseRequested(c) => {
-                        s_should_stop.send(true);
-                        break;
+                let should_stop = match event {
+                    show_image::event::WindowEvent::CloseRequested(_) => true,
+                    show_image::event::WindowEvent::KeyboardInput(e)
+                        if e.input.key_code == Some(show_image::event::VirtualKeyCode::Escape) =>
+                    {
+                        true
                     }
-                    show_image::event::WindowEvent::KeyboardInput(e) => {
-                        if e.input.key_code == Some(show_image::event::VirtualKeyCode::Escape) {
-                            s_should_stop.send(true);
-                            break;
-                        }
-                    }
-                    _ => {}
+                    _ => false,
+                };
+
+                // send signal
+                if should_stop {
+                    let _ = s_should_stop.send(true);
+                    break;
                 }
             }
         }

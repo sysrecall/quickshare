@@ -1,10 +1,8 @@
 use std::net::UdpSocket;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::{env, sync::mpsc::channel};
 
 use crate::{qrgen::QrGen, server::FileServer};
-use show_image::{ImageInfo, ImageView, create_window};
 
 mod qrgen;
 mod server;
@@ -55,17 +53,17 @@ async fn main() {
     let mut qrgen = match server.files.len() {
         1 => {
             let (name, _) = server.files.iter().next().unwrap();
-            let address = format!("{}:{}/{}", root_address, PORT, name);
+            let address = format!("http://{}:{}/{}", root_address, PORT, name);
             println!("Address: {}", address);
             QrGen::create(address.as_ref()).unwrap()
         }
         _ => QrGen::create(root_address.as_ref()).unwrap(),
     };
 
-    qrgen.generate_image();
-    qrgen.show(s_should_stop).unwrap();
-
     // start server
     println!("Starting server at: {}:{}", root_address, PORT);
-    server.start(r_should_stop).await.unwrap();
+    server.start(r_should_stop).unwrap();
+
+    qrgen.generate_image();
+    qrgen.show(s_should_stop).unwrap();
 }

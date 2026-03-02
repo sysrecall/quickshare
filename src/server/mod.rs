@@ -10,8 +10,6 @@ use actix_web::{
 };
 use rand::{RngExt, distr::Alphanumeric};
 
-struct AppState {}
-
 pub struct FileServer {
     pub files: FileMap,
     pub port: u16,
@@ -41,30 +39,47 @@ impl FileServer {
         }
     }
 
-    pub async fn start(&mut self, r_should_stop: Receiver<bool>) -> std::io::Result<()> {
+    pub fn start(&mut self, r_should_stop: Receiver<bool>) -> std::io::Result<()> {
         let app_state = web::Data::new(self.files.clone());
+        let port = self.port;
 
-        let server = HttpServer::new(move || {
-            App::new()
-                .app_data(app_state.clone())
-                .route("/", web::get().to(list_files))
-                .route("/{id}", web::get().to(download_file))
-        })
-        .bind(("0.0.0.0", 3000))?
-        .run();
+        // channel to get the server handle back from the thread
+        let (tx, rx) = std::sync::mpsc::channel();
 
-        let handle = server.handle();
-        self.handle = Some(handle.clone());
+        std::thread::spawn(move || {
+            let sys = actix_rt::System::new();
+            sys.block_on(async move {
+                let server = HttpServer::new(move || {
+                    App::new()
+                        .app_data(app_state.clone())
+                        .route("/", web::get().to(list_files))
+                        .route("/{id}", web::get().to(download_file))
+                })
+                .bind(("0.0.0.0", port))
+                .unwrap()
+                .run();
 
-        actix_rt::spawn(async move {
-            if let Ok(graceful) = r_should_stop.recv() {
-                handle.stop(graceful).await;
-            }
+                let handle = server.handle();
+                tx.send(handle.clone()).unwrap(); // send handle back before blocking
+
+                actix_rt::spawn(async move {
+                    if let Ok(graceful) = r_should_stop.recv() {
+                        handle.stop(graceful).await;
+                    }
+                });
+
+                server.await.unwrap();
+            });
         });
 
-        server.await
+        // block until we get the handle, then return
+        let handle = rx.recv().unwrap();
+        self.handle = Some(handle);
+
+        Ok(())
     }
 
+    // for manual shutdown
     pub async fn stop(&self) {
         if let Some(handle) = &self.handle {
             handle.stop(true).await;
