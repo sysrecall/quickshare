@@ -1,22 +1,15 @@
 #![windows_subsystem = "windows"]
 
-use std::net::UdpSocket;
 use std::path::PathBuf;
 use std::{env, sync::mpsc::channel};
 
-use crate::{qrgen::QrGen, server::FileServer};
+use qrgen::QrGen;
+use server::FileServer;
+use util::get_local_ip;
 
 mod qrgen;
 mod server;
-
-fn get_local_ip() -> Option<String> {
-    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    match socket.local_addr() {
-        Ok(addr) => Some(addr.ip().to_string()),
-        Err(_) => None,
-    }
-}
+mod util;
 
 #[actix_web::main]
 #[show_image::main]
