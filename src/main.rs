@@ -40,13 +40,13 @@ async fn main() {
     // setup server config
     const PORT: u16 = 3000;
     let mut server = FileServer::new(file_names, PORT);
-    let root_address = get_local_ip().unwrap();
+    let root_address = format!("http://{}:{}", get_local_ip().unwrap(), PORT);
 
     // generate qr code
     let mut qrgen = match server.files.len() {
         1 => {
             let (name, _) = server.files.iter().next().unwrap();
-            let address = format!("http://{}:{}/{}", root_address, PORT, name);
+            let address = format!("{}/{}", root_address, name);
             println!("Address: {}", address);
             QrGen::create(address.as_ref()).unwrap()
         }
@@ -54,7 +54,7 @@ async fn main() {
     };
 
     // start server
-    println!("Starting server at: {}:{}", root_address, PORT);
+    println!("Starting server at: {}", root_address);
     server.start(r_should_stop).unwrap();
 
     // generate and show qr
