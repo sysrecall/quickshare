@@ -30,7 +30,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 ; Remove the following line to run in administrative install mode (install for all users).
 PrivilegesRequired=lowest
-OutputBaseFilename="quickshare setup"
+OutputBaseFilename="quickshare-setup"
 SolidCompression=yes
 WizardStyle=modern dynamic
 
@@ -47,4 +47,3 @@ Root: HKCU; Subkey: "Software\Classes\*\shell\{#MyAppName}\command"; ValueType: 
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-
