@@ -2,8 +2,8 @@ name: Build and Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -27,7 +27,7 @@ jobs:
 
       - name: Compile installer
         run: |
-          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" setup\setup.iss
+          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" ".\setup\setup.iss"
 
       - name: Upload artifacts to release
         uses: softprops/action-gh-release@v2
