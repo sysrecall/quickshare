@@ -1,4 +1,11 @@
-use std::{collections::HashMap, path::PathBuf, sync::mpsc::Receiver};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{
+        Arc, RwLock,
+        mpsc::{Receiver, Sender},
+    },
+};
 
 use actix_files::NamedFile;
 use actix_web::{
@@ -10,41 +17,74 @@ use actix_web::{
 };
 use rand::{RngExt, distr::Alphanumeric};
 
+use crate::{ipc::IpcServer, util::get_local_ip};
+
 pub struct FileServer {
-    pub files: FileMap,
+    pub files: Arc<RwLock<FileMap>>,
     pub port: u16,
     handle: Option<ServerHandle>,
+    ipc_server: IpcServer,
+    // receiver end of the channel whose sender lives inside ipc_server
+    r_filename: Option<Receiver<String>>,
 }
 
 pub type FileMap = HashMap<String, PathBuf>;
 
+fn generate_filename() -> String {
+    rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(12)
+        .map(char::from)
+        .collect()
+}
+
+fn get_files_from_filenames(file_names: Vec<PathBuf>) -> FileMap {
+    let mut files = FileMap::new();
+    for file_name in file_names {
+        files.insert(generate_filename(), file_name);
+    }
+    files
+}
+
 impl FileServer {
     pub fn new(file_names: Vec<PathBuf>, port: u16) -> FileServer {
-        let mut files = FileMap::new();
+        let files = Arc::new(RwLock::new(get_files_from_filenames(file_names)));
 
-        for file_name in file_names {
-            let generated_name: String = rand::rng()
-                .sample_iter(&Alphanumeric)
-                .take(12)
-                .map(char::from)
-                .collect();
-
-            files.insert(generated_name, file_name);
-        }
+        // create the channel that connects IpcServer → FileServer
+        let (s_filename, r_filename) = std::sync::mpsc::channel();
+        let ipc_server = IpcServer::new(s_filename);
 
         FileServer {
             files,
             port,
             handle: None,
+            ipc_server,
+            r_filename: Some(r_filename),
         }
     }
 
-    pub fn start(&mut self, r_should_stop: Receiver<bool>) -> std::io::Result<()> {
+    pub fn start(
+        &mut self,
+        r_should_stop: Receiver<bool>,
+        s_new_address: Sender<String>,
+    ) -> std::io::Result<()> {
+        // start listening for filenames sent over the named pipe
+        self.ipc_server
+            .listen()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+        // take the receiver out so it can be moved into the actix thread
+        let r_filename = self
+            .r_filename
+            .take()
+            .expect("start() called more than once");
+
         let app_state = web::Data::new(self.files.clone());
         let port = self.port;
 
         // channel to get the server handle back from the thread
         let (tx, rx) = std::sync::mpsc::channel();
+        let files = self.files.clone();
 
         std::thread::spawn(move || {
             let sys = actix_rt::System::new();
@@ -68,18 +108,33 @@ impl FileServer {
                     }
                 });
 
+                // receive new filenames from IpcServer and register them
+                std::thread::spawn(move || {
+                    while let Ok(filename) = r_filename.recv() {
+                        let generated_filename = generate_filename();
+                        let filepath = PathBuf::from(filename.trim());
+                        files
+                            .write()
+                            .unwrap()
+                            .insert(generated_filename.clone(), filepath);
+                        let full_url = format!(
+                            "http://{:?}/{}",
+                            get_local_ip().unwrap(),
+                            generated_filename
+                        );
+                        let _ = s_new_address.send(full_url);
+                    }
+                });
+
                 server.await.unwrap();
             });
         });
 
         // block until we get the handle, then return
-        let handle = rx.recv().unwrap();
-        self.handle = Some(handle);
-
+        self.handle = Some(rx.recv().unwrap());
         Ok(())
     }
 
-    // for manual shutdown
     pub async fn stop(&self) {
         if let Some(handle) = &self.handle {
             handle.stop(true).await;
@@ -87,7 +142,7 @@ impl FileServer {
     }
 }
 
-async fn list_files(files: web::Data<FileMap>) -> HttpResponse {
+async fn list_files(files: web::Data<Arc<RwLock<FileMap>>>) -> HttpResponse {
     let mut body = String::from(
         "<!doctype html>
         <html>
@@ -105,9 +160,8 @@ async fn list_files(files: web::Data<FileMap>) -> HttpResponse {
             <ul>",
     );
 
-    for (id, file) in files.iter() {
+    for (id, file) in files.read().unwrap().iter() {
         let name = file.file_name().unwrap_or_default().to_string_lossy();
-
         body.push_str(&format!("<li><a href=\"/{}\">{}</a></li>", id, name));
     }
 
@@ -121,22 +175,25 @@ async fn list_files(files: web::Data<FileMap>) -> HttpResponse {
 async fn download_file(
     req: HttpRequest,
     file_id: web::Path<String>,
-    files: web::Data<FileMap>,
+    files: web::Data<Arc<RwLock<FileMap>>>,
 ) -> Result<HttpResponse, HttpError> {
     let id = file_id.into_inner();
 
-    let file = match files.get(&id) {
-        Some(f) => f,
-        None => return Ok(HttpResponse::NotFound().finish()),
+    let file_path = {
+        let files = files.read().unwrap();
+        match files.get(&id) {
+            Some(f) => f.clone(),
+            None => return Ok(HttpResponse::NotFound().finish()),
+        }
     };
 
-    let filename = file
+    let filename = file_path
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
 
-    match NamedFile::open(&file) {
+    match NamedFile::open(&file_path) {
         Ok(named_file) => Ok(named_file
             .set_content_disposition(ContentDisposition {
                 disposition: DispositionType::Attachment,
@@ -144,6 +201,6 @@ async fn download_file(
             })
             .use_last_modified(false)
             .into_response(&req)),
-        _ => return Ok(HttpResponse::NotFound().finish()),
+        _ => Ok(HttpResponse::NotFound().finish()),
     }
 }

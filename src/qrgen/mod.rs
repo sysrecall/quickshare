@@ -1,78 +1,72 @@
-use std::{env, path::PathBuf, sync::mpsc::Sender};
-
-use image::{ImageReader, Luma};
+use image::Luma;
 use qrcode::{QrCode, types::QrError};
-use rand::{RngExt, distr::Alphanumeric};
 use show_image::{ImageInfo, ImageView, WindowOptions, create_window};
+use std::sync::mpsc::Sender;
 
 pub struct QrGen {
     code: QrCode,
-    save_location: Option<PathBuf>,
 }
 
 impl QrGen {
     pub fn create(data: &str) -> Result<Self, QrError> {
-        let code = QrCode::new(data.as_bytes());
-        match code {
-            Ok(code) => Ok(Self {
-                code: code,
-                save_location: None,
-            }),
-            Err(e) => Err(e),
-        }
+        let code = QrCode::new(data.as_bytes())?;
+        Ok(Self { code })
     }
 
-    pub fn generate_image(&mut self) {
-        let image = self.code.render::<Luma<u8>>().build();
-
-        let mut qr_location = env::temp_dir();
-
-        let file_name: String = rand::rng()
-            .sample_iter(&Alphanumeric)
-            .take(12)
-            .map(char::from)
-            .collect();
-
-        let file_name = format!("{}.png", file_name);
-
-        qr_location.push(file_name);
-
-        image.save(&qr_location).unwrap();
-
-        self.save_location = Some(qr_location);
+    fn render_rgb(&self) -> image::RgbImage {
+        let luma = self.code.render::<Luma<u8>>().build();
+        image::DynamicImage::ImageLuma8(luma).to_rgb8()
     }
 
-    pub fn show(&self, s_should_stop: Sender<bool>) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(location) = &self.save_location {
-            let img = ImageReader::open(location)?.decode()?.to_rgb8();
-
-            let (width, height) = img.dimensions();
-
-            let image_view = ImageView::new(ImageInfo::rgb8(width, height), img.as_raw());
-
-            let options = WindowOptions::default()
+    pub fn show(
+        &self,
+        s_should_stop: Sender<bool>,
+        r_new_address: std::sync::mpsc::Receiver<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let img = self.render_rgb();
+        let (width, height) = img.dimensions();
+        let window = create_window(
+            "QuickShare",
+            WindowOptions::default()
                 .set_size([width, height])
-                .set_preserve_aspect_ratio(true);
-            let window = create_window("QuickShare", options)?;
-            window.set_image("QuickShare", image_view)?;
+                .set_preserve_aspect_ratio(true),
+        )?;
+        window.set_image(
+            "QuickShare",
+            ImageView::new(ImageInfo::rgb8(width, height), img.as_raw()),
+        )?;
 
-            // close on escape or close button
-            for event in window.event_channel()? {
-                let should_stop = match event {
-                    show_image::event::WindowEvent::CloseRequested(_) => true,
-                    show_image::event::WindowEvent::KeyboardInput(e)
-                        if e.input.key_code == Some(show_image::event::VirtualKeyCode::Escape) =>
-                    {
-                        true
-                    }
-                    _ => false,
+        // watch for new addresses and re-render from a background thread
+        let window_clone = window.clone();
+        std::thread::spawn(move || {
+            while let Ok(new_address) = r_new_address.recv() {
+                println!("{}", &new_address);
+
+                let qr = match QrGen::create(&new_address) {
+                    Ok(q) => q,
+                    Err(_) => continue,
                 };
+                let img = qr.render_rgb();
+                let (w, h) = img.dimensions();
+                let view = ImageView::new(ImageInfo::rgb8(w, h), img.as_raw());
+                window_clone.set_image("QuickShare", view).ok();
+            }
+        });
 
-                // send signal
-                if should_stop {
-                    let _ = s_should_stop.send(true);
-                    break;
+        // main event loop (blocks on main thread)
+        for event in window.event_channel()? {
+            let should_stop = match event {
+                show_image::event::WindowEvent::CloseRequested(_) => true,
+                show_image::event::WindowEvent::KeyboardInput(e)
+                    if e.input.key_code == Some(show_image::event::VirtualKeyCode::Escape) =>
+                {
+                    true
                 }
+                _ => false,
+            };
+            if should_stop {
+                let _ = s_should_stop.send(true);
+                break;
             }
         }
         Ok(())
