@@ -15,17 +15,17 @@ use actix_web::{
     http::header::{ContentDisposition, DispositionParam, DispositionType},
     web,
 };
+
 use rand::{RngExt, distr::Alphanumeric};
 
-use crate::{ipc::IpcServer, util::get_local_ip};
+use crate::util::get_local_ip;
 
 pub struct FileServer {
     pub files: Arc<RwLock<FileMap>>,
     pub port: u16,
     handle: Option<ServerHandle>,
-    ipc_server: IpcServer,
     // receiver end of the channel whose sender lives inside ipc_server
-    r_filename: Option<Receiver<String>>,
+    r_filename: Option<crossbeam::channel::Receiver<String>>,
 }
 
 pub type FileMap = HashMap<String, PathBuf>;
@@ -47,44 +47,64 @@ fn get_files_from_filenames(file_names: Vec<PathBuf>) -> FileMap {
 }
 
 impl FileServer {
-    pub fn new(file_names: Vec<PathBuf>, port: u16) -> FileServer {
+    pub fn new(
+        file_names: Vec<PathBuf>,
+        r_filename: Option<crossbeam::channel::Receiver<String>>,
+        port: u16,
+    ) -> FileServer {
         let files = Arc::new(RwLock::new(get_files_from_filenames(file_names)));
 
         // create the channel that connects IpcServer → FileServer
-        let (s_filename, r_filename) = std::sync::mpsc::channel();
-        let ipc_server = IpcServer::new(s_filename);
 
         FileServer {
             files,
             port,
             handle: None,
-            ipc_server,
-            r_filename: Some(r_filename),
+            r_filename: r_filename,
         }
     }
 
-    pub fn start(
-        &mut self,
-        r_should_stop: Receiver<bool>,
-        s_new_address: Sender<String>,
-    ) -> std::io::Result<()> {
-        // start listening for filenames sent over the named pipe
-        self.ipc_server
-            .listen()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-
+    pub fn listen_file_change(&mut self, s_qrgen_newaddress: Sender<String>) {
         // take the receiver out so it can be moved into the actix thread
         let r_filename = self
             .r_filename
             .take()
-            .expect("start() called more than once");
+            .expect("listener called more than once");
+        let files = self.files.clone();
+        let port = self.port;
 
+        std::thread::spawn(move || {
+            while let Ok(filename) = r_filename.recv() {
+                dbg!("IPC Server: Recieved file {:?}", &filename);
+
+                let generated_filename = generate_filename();
+                let filepath = PathBuf::from(filename.trim());
+                files
+                    .write()
+                    .unwrap()
+                    .insert(generated_filename.clone(), filepath);
+
+                let full_url = match files.read().unwrap().len() {
+                    1 => format!(
+                        "http://{}:{}/{}",
+                        get_local_ip().unwrap(),
+                        port,
+                        generated_filename
+                    ),
+                    _ => format!("http://{}:{}", get_local_ip().unwrap(), port,),
+                };
+
+                let _ = s_qrgen_newaddress.send(full_url);
+            }
+        });
+    }
+
+    pub fn start(&mut self, r_should_stop: Receiver<bool>) -> std::io::Result<()> {
         let app_state = web::Data::new(self.files.clone());
         let port = self.port;
 
         // channel to get the server handle back from the thread
         let (tx, rx) = std::sync::mpsc::channel();
-        let files = self.files.clone();
 
         std::thread::spawn(move || {
             let sys = actix_rt::System::new();
@@ -105,24 +125,6 @@ impl FileServer {
                 actix_rt::spawn(async move {
                     if let Ok(graceful) = r_should_stop.recv() {
                         handle.stop(graceful).await;
-                    }
-                });
-
-                // receive new filenames from IpcServer and register them
-                std::thread::spawn(move || {
-                    while let Ok(filename) = r_filename.recv() {
-                        let generated_filename = generate_filename();
-                        let filepath = PathBuf::from(filename.trim());
-                        files
-                            .write()
-                            .unwrap()
-                            .insert(generated_filename.clone(), filepath);
-                        let full_url = format!(
-                            "http://{:?}/{}",
-                            get_local_ip().unwrap(),
-                            generated_filename
-                        );
-                        let _ = s_new_address.send(full_url);
                     }
                 });
 

@@ -1,7 +1,9 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::io::Read;
 use std::path::PathBuf;
 use std::{env, sync::mpsc::channel};
+use std::{io, thread};
 
 use qrgen::QrGen;
 use server::FileServer;
@@ -21,9 +23,8 @@ mod util;
 #[actix_web::main]
 async fn main() {
     // multiple files
-    // Get files from the args
     // let n = env::args().len();
-    // let mut file_names: Vec<PathBuf> = Vec::with_capacity(n);
+    // let mut paths: Vec<PathBuf> = Vec::with_capacity(n);
 
     // for arg in env::args().skip(1) {
     //     let path = PathBuf::from(&arg);
@@ -33,14 +34,15 @@ async fn main() {
     //         continue;
     //     }
 
-    //     file_names.push(path);
+    //     paths.push(path);
     // }
 
-    // if file_names.is_empty() {
+    // if paths.is_empty() {
     //     eprintln!("No files provided.");
     //     std::process::exit(1);
     // }
 
+    // single file
     let path = PathBuf::from(&env::args().skip(1).next().expect("No file provided!"));
     if !path.exists() {
         eprintln!("File does not exist: {:?}", path);
@@ -72,36 +74,54 @@ async fn main() {
     }
 
     // setup channel
-    let (s_should_stop, r_should_stop) = channel::<bool>();
+    let (s_stop, r_stop) = channel::<bool>();
 
     // else create an ipc server
     // let ipc_server = IpcServer::new(s_filename);
+    let mut ipc_server = IpcServer::new();
+    if ipc_server.listen().is_err() {
+        eprintln!("Error starting IPC server, exiting...");
+        std::process::exit(1);
+    }
+
+    let ipc_receiver = ipc_server.receiver.clone();
+
+    // thread::spawn(move || {
+    //     while let Ok(msg) = ipc_receiver.recv() {
+    //         println!("IPC SERVER: Received {}", msg);
+    //     }
+    // });
+
+    // let mut stdin = io::stdin();
+    // let _ = stdin.read(&mut [0u8]).unwrap();
+
+    // return;
+
+    let (s_new_address, r_new_address) = channel::<String>();
 
     // start listening
     // setup server config
     const PORT: u16 = 3000;
-    let mut server = FileServer::new(vec![path], PORT); // creating a vec on the fly
+    let mut server = FileServer::new(vec![path], Some(ipc_receiver), PORT); // creating a vec on the fly
     let root_address = format!("http://{}:{}", get_local_ip().unwrap(), PORT);
 
     // generate qr code
-    let qrgen = match server.files.read().unwrap().len() {
+    let mut qrgen = match server.files.read().unwrap().len() {
         1 => {
             let files = server.files.read().unwrap();
             let (name, _) = files.iter().next().unwrap();
             let address = format!("{}/{}", root_address, name);
             println!("Address: {}", address);
-            QrGen::create(address.as_ref()).unwrap()
+            QrGen::create(address.as_ref(), s_stop, Some(r_new_address)).unwrap()
         }
-        _ => QrGen::create(root_address.as_ref()).unwrap(),
+        _ => QrGen::create(root_address.as_ref(), s_stop, Some(r_new_address)).unwrap(),
     };
-
-    let (s_new_address, r_new_address) = std::sync::mpsc::channel::<String>();
 
     // start server
     println!("Starting server at: {}", root_address);
-    server.start(r_should_stop, s_new_address).unwrap();
+    server.listen_file_change(s_new_address);
+    server.start(r_stop).unwrap();
 
-    // generate and show qr
-    // qrgen.generate_image();
-    qrgen.show(s_should_stop, r_new_address).unwrap();
+    // show window
+    qrgen.show().unwrap();
 }
