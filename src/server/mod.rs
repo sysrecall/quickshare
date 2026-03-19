@@ -97,10 +97,7 @@ impl FileServer {
         });
     }
 
-    pub fn start(
-        &mut self,
-        r_should_stop: crossbeam::channel::Receiver<bool>,
-    ) -> std::io::Result<()> {
+    pub fn start(&mut self, r_stop: crossbeam::channel::Receiver<bool>) -> std::io::Result<()> {
         let app_state = web::Data::new(self.files.clone());
         let port = self.port;
 
@@ -123,7 +120,7 @@ impl FileServer {
             tx.send(handle.clone()).unwrap(); // send handle back before blocking
 
             actix_rt::spawn(async move {
-                if let Ok(graceful) = r_should_stop.recv() {
+                if let Ok(graceful) = r_stop.recv() {
                     handle.stop(graceful).await;
                 }
             });

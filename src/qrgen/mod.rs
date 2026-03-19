@@ -58,10 +58,10 @@ impl QrGen {
     }
 
     fn listen_window_events(&self) {
-        let s_stop = self.s_stop.clone();
-        let window = self.window.clone().unwrap();
+        // let s_stop = self.s_stop.clone();
+        // let window = self.window.clone().unwrap();
 
-        for event in window.event_channel().unwrap() {
+        for event in self.window.as_ref().unwrap().event_channel().unwrap() {
             let should_stop = match event {
                 show_image::event::WindowEvent::CloseRequested(_) => true,
                 show_image::event::WindowEvent::KeyboardInput(e)
@@ -73,7 +73,7 @@ impl QrGen {
             };
 
             if should_stop {
-                let _ = s_stop.send(true);
+                let _ = self.s_stop.send(true);
                 break;
             }
         }
@@ -98,6 +98,7 @@ impl QrGen {
         // listen for regen request
         self.listen_change();
 
+        // blocking
         // window events
         self.listen_window_events();
 

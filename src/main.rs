@@ -125,9 +125,6 @@ async fn run() {
                 server.listen_file_change(s_new_address);
                 server.start(r_stop).unwrap();
             });
-
-            // waits forever
-            futures::future::pending::<()>().await;
         });
     });
 
