@@ -120,11 +120,13 @@ async fn run() {
                 }
             });
 
-            tokio::task::spawn_blocking(move || {
+            let server = tokio::task::spawn_blocking(move || {
                 println!("starting server at: {}", root_address);
                 server.listen_file_change(s_new_address);
                 server.start(r_stop).unwrap();
             });
+
+            server.await.unwrap();
         });
     });
 
