@@ -75,8 +75,6 @@ impl FileServer {
 
         tokio::task::spawn_blocking(move || {
             while let Ok(filename) = r_filename.recv() {
-                dbg!("IPC Server: Recieved file {:?}", &filename);
-
                 let generated_filename = generate_filename();
                 let filepath = PathBuf::from(filename.trim());
                 files
@@ -109,30 +107,28 @@ impl FileServer {
         // channel to get the server handle back from the thread
         let (tx, rx) = std::sync::mpsc::channel();
 
-        std::thread::spawn(move || {
-            let sys = actix_rt::System::new();
-            sys.block_on(async move {
-                let server = HttpServer::new(move || {
-                    App::new()
-                        .app_data(app_state.clone())
-                        .route("/", web::get().to(list_files))
-                        .route("/{id}", web::get().to(download_file))
-                })
-                .bind(("0.0.0.0", port))
-                .unwrap()
-                .run();
+        let sys = actix_rt::System::new();
+        sys.block_on(async move {
+            let server = HttpServer::new(move || {
+                App::new()
+                    .app_data(app_state.clone())
+                    .route("/", web::get().to(list_files))
+                    .route("/{id}", web::get().to(download_file))
+            })
+            .bind(("0.0.0.0", port))
+            .unwrap()
+            .run();
 
-                let handle = server.handle();
-                tx.send(handle.clone()).unwrap(); // send handle back before blocking
+            let handle = server.handle();
+            tx.send(handle.clone()).unwrap(); // send handle back before blocking
 
-                actix_rt::spawn(async move {
-                    if let Ok(graceful) = r_should_stop.recv() {
-                        handle.stop(graceful).await;
-                    }
-                });
-
-                server.await.unwrap();
+            actix_rt::spawn(async move {
+                if let Ok(graceful) = r_should_stop.recv() {
+                    handle.stop(graceful).await;
+                }
             });
+
+            server.await.unwrap();
         });
 
         // block until we get the handle, then return

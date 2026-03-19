@@ -1,12 +1,9 @@
 use image::Luma;
 use qrcode::{QrCode, types::QrError};
 use show_image::{ImageInfo, ImageView, WindowOptions, WindowProxy, create_window};
-use std::{
-    sync::{
-        Arc, Mutex,
-        mpsc::{Receiver, Sender},
-    },
-    thread,
+use std::sync::{
+    Arc, Mutex,
+    mpsc::{Receiver, Sender},
 };
 
 pub struct QrGen {

@@ -68,15 +68,13 @@ async fn run() {
             }
             Ok(_handle) => {
                 if GetLastError() == ERROR_ALREADY_EXISTS {
-                    dbg!("An instance is already running");
                     // create an ipc client
                     let ipc_client = IpcClient::new();
-                    dbg!("Sending file to running instance: {}", &path);
+
+                    // send file to running instance
                     let handle = ipc_client.send(path.clone());
                     let res = handle.await;
-                    dbg!("Res: {res}");
-                    dbg!("Exiting...");
-                    // send file to running instance
+
                     std::process::exit(0);
                 }
             }
@@ -84,17 +82,8 @@ async fn run() {
     }
 
     // create an ipc server
-    // let ipc_server = IpcServer::new(s_filename);
     let mut ipc_server = IpcServer::new();
     let ipc_receiver = ipc_server.receiver.clone();
-
-    tokio::spawn(async move {
-        dbg!("TESTTTTTTTTTTTTTTTTTTTTTTT");
-        if ipc_server.listen().await.is_err() {
-            eprintln!("Error starting IPC server, exiting...");
-            std::process::exit(1);
-        }
-    });
 
     let (s_stop, r_stop) = unbounded::<bool>();
     let (s_new_address, r_new_address) = channel::<String>();
@@ -111,18 +100,38 @@ async fn run() {
             let files = server.files.read().unwrap();
             let (name, _) = files.iter().next().unwrap();
             let address = format!("{}/{}", root_address, name);
+
             println!("Address: {}", address);
+
             QrGen::create(address.as_ref(), s_stop, Some(r_new_address)).unwrap()
         }
         _ => QrGen::create(root_address.as_ref(), s_stop, Some(r_new_address)).unwrap(),
     };
 
-    tokio::task::spawn_blocking(move || {
-        println!("Starting server at: {}", root_address);
-        server.listen_file_change(s_new_address);
-        server.start(r_stop).unwrap();
+    // background thread
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        rt.block_on(async move {
+            tokio::spawn(async move {
+                if ipc_server.listen().await.is_err() {
+                    eprintln!("error starting IPC server, exiting...");
+                    std::process::exit(1);
+                }
+            });
+
+            tokio::task::spawn_blocking(move || {
+                println!("starting server at: {}", root_address);
+                server.listen_file_change(s_new_address);
+                server.start(r_stop).unwrap();
+            });
+
+            // waits forever
+            futures::future::pending::<()>().await;
+        });
     });
 
     // show window
+    // blocking main thread
     qrgen.show().unwrap();
 }

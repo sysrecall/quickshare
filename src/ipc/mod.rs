@@ -32,7 +32,6 @@ impl IpcServer {
         let handle = tokio::spawn(async move {
             let result = async move {
                 loop {
-                    dbg!("Waiting for incoming conns");
                     let conn = match listener.accept().await {
                         Ok(c) => c,
                         Err(e) => {
@@ -41,11 +40,9 @@ impl IpcServer {
                         }
                     };
 
-                    dbg!("Connection Established");
                     let mut reader = BufReader::new(conn);
                     let mut line = String::new();
 
-                    dbg!("Reading pipe");
                     match reader.read_line(&mut line).await {
                         Ok(0) => eprintln!("Client disconnected without sending"),
                         Ok(_) => {
@@ -57,8 +54,6 @@ impl IpcServer {
                         }
                         Err(e) => eprintln!("Read failed: {e}"),
                     }
-
-                    dbg!("Reading complete");
                 }
             };
 
@@ -76,26 +71,19 @@ impl IpcClient {
         Self {}
     }
     pub fn send(&self, path: PathBuf) -> JoinHandle<()> {
-        let handle = tokio::spawn( async move {
-            dbg!("Before establishing connection");
+        let handle = tokio::spawn(async move {
             let mut conn = SendPipeStream::<pipe_mode::Bytes>::connect_by_path(PIPE_NAME)
                 .await
                 .expect("Unable to connect to server!");
 
-            dbg!("After establishing connection");
             let mut message = path.as_os_str().as_encoded_bytes().to_vec();
             message.push(b'\n');
 
-            dbg!("Sending file from pipe: {}", &message);
-
             conn.write_all(&message).await.unwrap();
 
-            dbg!("Sent file from pipe");
             conn.shutdown().await.unwrap();
-
         });
 
         handle
-
     }
 }
