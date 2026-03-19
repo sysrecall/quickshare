@@ -1,9 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use crossbeam::channel::unbounded;
 use std::io::Read;
 use std::path::PathBuf;
-use std::{env, sync::mpsc::channel};
+use std::sync::mpsc::channel;
+use std::{env, sync};
 use std::{io, thread};
+use tokio::join;
 
 use qrgen::QrGen;
 use server::FileServer;
@@ -19,9 +22,12 @@ mod qrgen;
 mod server;
 mod util;
 
-#[show_image::main]
+fn main() {
+    show_image::run_context(|| run());
+}
+
 #[actix_web::main]
-async fn main() {
+async fn run() {
     // multiple files
     // let n = env::args().len();
     // let mut paths: Vec<PathBuf> = Vec::with_capacity(n);
@@ -62,10 +68,14 @@ async fn main() {
             }
             Ok(_handle) => {
                 if GetLastError() == ERROR_ALREADY_EXISTS {
-                    eprintln!("An instance is already running, exiting...");
+                    dbg!("An instance is already running");
                     // create an ipc client
                     let ipc_client = IpcClient::new();
-                    ipc_client.send(path.clone());
+                    dbg!("Sending file to running instance: {}", &path);
+                    let handle = ipc_client.send(path.clone());
+                    let res = handle.await;
+                    dbg!("Res: {res}");
+                    dbg!("Exiting...");
                     // send file to running instance
                     std::process::exit(0);
                 }
@@ -73,30 +83,20 @@ async fn main() {
         }
     }
 
-    // setup channel
-    let (s_stop, r_stop) = channel::<bool>();
-
-    // else create an ipc server
+    // create an ipc server
     // let ipc_server = IpcServer::new(s_filename);
     let mut ipc_server = IpcServer::new();
-    if ipc_server.listen().is_err() {
-        eprintln!("Error starting IPC server, exiting...");
-        std::process::exit(1);
-    }
-
     let ipc_receiver = ipc_server.receiver.clone();
 
-    // thread::spawn(move || {
-    //     while let Ok(msg) = ipc_receiver.recv() {
-    //         println!("IPC SERVER: Received {}", msg);
-    //     }
-    // });
+    tokio::spawn(async move {
+        dbg!("TESTTTTTTTTTTTTTTTTTTTTTTT");
+        if ipc_server.listen().await.is_err() {
+            eprintln!("Error starting IPC server, exiting...");
+            std::process::exit(1);
+        }
+    });
 
-    // let mut stdin = io::stdin();
-    // let _ = stdin.read(&mut [0u8]).unwrap();
-
-    // return;
-
+    let (s_stop, r_stop) = unbounded::<bool>();
     let (s_new_address, r_new_address) = channel::<String>();
 
     // start listening
@@ -117,10 +117,11 @@ async fn main() {
         _ => QrGen::create(root_address.as_ref(), s_stop, Some(r_new_address)).unwrap(),
     };
 
-    // start server
-    println!("Starting server at: {}", root_address);
-    server.listen_file_change(s_new_address);
-    server.start(r_stop).unwrap();
+    tokio::task::spawn_blocking(move || {
+        println!("Starting server at: {}", root_address);
+        server.listen_file_change(s_new_address);
+        server.start(r_stop).unwrap();
+    });
 
     // show window
     qrgen.show().unwrap();

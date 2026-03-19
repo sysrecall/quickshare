@@ -64,7 +64,7 @@ impl FileServer {
         }
     }
 
-    pub fn listen_file_change(&mut self, s_qrgen_newaddress: Sender<String>) {
+    pub fn listen_file_change(&mut self, s_qrgen_new_address: Sender<String>) {
         // take the receiver out so it can be moved into the actix thread
         let r_filename = self
             .r_filename
@@ -73,7 +73,7 @@ impl FileServer {
         let files = self.files.clone();
         let port = self.port;
 
-        std::thread::spawn(move || {
+        tokio::task::spawn_blocking(move || {
             while let Ok(filename) = r_filename.recv() {
                 dbg!("IPC Server: Recieved file {:?}", &filename);
 
@@ -94,12 +94,15 @@ impl FileServer {
                     _ => format!("http://{}:{}", get_local_ip().unwrap(), port,),
                 };
 
-                let _ = s_qrgen_newaddress.send(full_url);
+                let _ = s_qrgen_new_address.send(full_url);
             }
         });
     }
 
-    pub fn start(&mut self, r_should_stop: Receiver<bool>) -> std::io::Result<()> {
+    pub fn start(
+        &mut self,
+        r_should_stop: crossbeam::channel::Receiver<bool>,
+    ) -> std::io::Result<()> {
         let app_state = web::Data::new(self.files.clone());
         let port = self.port;
 
