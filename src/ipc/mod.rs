@@ -23,7 +23,6 @@ impl IpcServer {
         let listener = PipeListenerOptions::new()
             .path(Path::new(PIPE_NAME))
             .create_tokio_recv_only::<pipe_mode::Bytes>()?;
-        // .create_tokio_duplex::<pipe_mode::Bytes>()?;
 
         let sender = self.sender.clone();
 
@@ -68,20 +67,30 @@ impl IpcClient {
     pub fn new() -> Self {
         Self {}
     }
-    pub fn send(&self, path: PathBuf) -> JoinHandle<()> {
-        let handle = tokio::spawn(async move {
-            let mut conn = SendPipeStream::<pipe_mode::Bytes>::connect_by_path(PIPE_NAME)
-                .await
-                .expect("Unable to connect to server!");
 
+    pub fn send(&self, path: PathBuf) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let conn = {
+                let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+                loop {
+                    match SendPipeStream::<pipe_mode::Bytes>::connect_by_path(PIPE_NAME).await {
+                        Ok(c) => break c,
+                        Err(_) if tokio::time::Instant::now() < deadline => {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to connect to IPC server after 5s: {e}");
+                            return;
+                        }
+                    }
+                }
+            };
+
+            let mut conn = conn;
             let mut message = path.as_os_str().as_encoded_bytes().to_vec();
             message.push(b'\n');
-
             conn.write_all(&message).await.unwrap();
-
             conn.shutdown().await.unwrap();
-        });
-
-        handle
+        })
     }
 }

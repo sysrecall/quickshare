@@ -87,37 +87,31 @@ impl FileServer {
         });
     }
 
-    // Blocking: spins up its own current-thread runtime, returns when the server stops.
-    pub fn start(&mut self, r_stop: crossbeam::channel::Receiver<bool>) -> std::io::Result<()> {
+    pub async fn start(
+        &mut self,
+        r_stop: crossbeam::channel::Receiver<bool>,
+    ) -> std::io::Result<()> {
         let files = self.files.clone();
         let port = self.port;
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let app = Router::new()
+            .route("/", get(list_files))
+            .route("/{id}", get(download_file))
+            .with_state(files);
 
-        rt.block_on(async move {
-            let app = Router::new()
-                .route("/", get(list_files))
-                .route("/{id}", get(download_file))
-                .with_state(files);
+        let listener = TcpListener::bind(("0.0.0.0", port)).await?;
+        println!("Listening on 0.0.0.0:{}", port);
 
-            let listener = TcpListener::bind(("0.0.0.0", port)).await?;
-            println!("Listening on 0.0.0.0:{}", port);
-
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    // r_stop is a sync crossbeam receiver; bridge it to async via spawn_blocking.
-                    tokio::task::spawn_blocking(move || {
-                        let _ = r_stop.recv(); // blocks until QrGen sends the stop signal
-                    })
-                    .await
-                    .ok();
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                // r_stop is a sync crossbeam receiver; bridge it to async via spawn_blocking.
+                tokio::task::spawn_blocking(move || {
+                    let _ = r_stop.recv(); // blocks until QrGen sends the stop signal
                 })
-                .await?;
-
-            Ok::<(), std::io::Error>(())
-        })?;
+                .await
+                .ok();
+            })
+            .await?;
 
         Ok(())
     }

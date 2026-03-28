@@ -25,26 +25,6 @@ fn main() {
 
 #[tokio::main]
 async fn run() {
-    // multiple files
-    // let n = env::args().len();
-    // let mut paths: Vec<PathBuf> = Vec::with_capacity(n);
-
-    // for arg in env::args().skip(1) {
-    //     let path = PathBuf::from(&arg);
-
-    //     if !path.exists() {
-    //         eprintln!("Warning: file does not exist: {}", arg);
-    //         continue;
-    //     }
-
-    //     paths.push(path);
-    // }
-
-    // if paths.is_empty() {
-    //     eprintln!("No files provided.");
-    //     std::process::exit(1);
-    // }
-
     // single file
     let path = PathBuf::from(&env::args().skip(1).next().expect("No file provided!"));
     if !path.exists() {
@@ -53,30 +33,24 @@ async fn run() {
     }
 
     // try to create mutex
-    unsafe {
-        let mutex = CreateMutexW(None, true, w!("quickshare_mutex"));
-        println!("Created mutex: {:?}", mutex);
+    // hold mutex guard
+    let _mutex_guard = unsafe {
+        let mutex = CreateMutexW(None, true, w!("quickshare_mutex")).unwrap_or_else(|e| {
+            eprintln!("Failed to create mutex: {:?}", e);
+            std::process::exit(1);
+        });
 
-        // if exist pass to already running instance
-        match mutex {
-            Err(e) => {
-                eprintln!("Failed to create mutex: {:?}", e);
-                std::process::exit(1);
-            }
-            Ok(_handle) => {
-                if GetLastError() == ERROR_ALREADY_EXISTS {
-                    // create an ipc client
-                    let ipc_client = IpcClient::new();
-
-                    // send file to running instance
-                    let handle = ipc_client.send(path.clone());
-                    let res = handle.await;
-
-                    std::process::exit(0);
-                }
-            }
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            let ipc_client = IpcClient::new();
+            let handle = ipc_client.send(path.clone());
+            handle
+                .await
+                .unwrap_or_else(|e| eprintln!("IPC send failed: {e}"));
+            std::process::exit(0);
         }
-    }
+
+        mutex
+    };
 
     // create an ipc server
     let mut ipc_server = IpcServer::new();
@@ -113,10 +87,10 @@ async fn run() {
     });
 
     // start() is blocking, so it needs spawn_blocking
-    tokio::task::spawn_blocking(move || {
+    tokio::spawn(async move {
         println!("starting server at: {}", root_address);
         server.listen_file_change(s_new_address);
-        server.start(r_stop).unwrap();
+        server.start(r_stop).await.unwrap();
     });
 
     // show window
