@@ -1,12 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use crossbeam::channel::unbounded;
-use std::io::Read;
+use std::env;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
-use std::{env, sync};
-use std::{io, thread};
-use tokio::join;
 
 use qrgen::QrGen;
 use server::FileServer;
@@ -26,7 +23,7 @@ fn main() {
     show_image::run_context(|| run());
 }
 
-#[actix_web::main]
+#[tokio::main]
 async fn run() {
     // multiple files
     // let n = env::args().len();
@@ -108,26 +105,18 @@ async fn run() {
         _ => QrGen::create(root_address.as_ref(), s_stop, Some(r_new_address)).unwrap(),
     };
 
-    // background thread
-    thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+    tokio::spawn(async move {
+        if ipc_server.listen().await.is_err() {
+            eprintln!("error starting IPC server, exiting...");
+            std::process::exit(1);
+        }
+    });
 
-        rt.block_on(async move {
-            tokio::spawn(async move {
-                if ipc_server.listen().await.is_err() {
-                    eprintln!("error starting IPC server, exiting...");
-                    std::process::exit(1);
-                }
-            });
-
-            let server = tokio::task::spawn_blocking(move || {
-                println!("starting server at: {}", root_address);
-                server.listen_file_change(s_new_address);
-                server.start(r_stop).unwrap();
-            });
-
-            server.await.unwrap();
-        });
+    // start() is blocking, so it needs spawn_blocking
+    tokio::task::spawn_blocking(move || {
+        println!("starting server at: {}", root_address);
+        server.listen_file_change(s_new_address);
+        server.start(r_stop).unwrap();
     });
 
     // show window

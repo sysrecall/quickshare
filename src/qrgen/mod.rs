@@ -44,6 +44,7 @@ impl QrGen {
         let code = Arc::clone(&self.code);
         let receiver = self.r_new_address.take().expect("listen() already called");
 
+        // start listening on tokio thread pool
         tokio::task::spawn_blocking(move || {
             while let Ok(new_address) = receiver.recv() {
                 *code.lock().unwrap() = QrCode::new(new_address.as_bytes()).unwrap();

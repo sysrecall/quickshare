@@ -3,12 +3,10 @@ use crossbeam::channel;
 use interprocess::os::windows::named_pipe::{PipeListenerOptions, pipe_mode, tokio::*};
 
 use std::path::{Path, PathBuf};
-use std::thread;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::task::JoinHandle;
 
 const PIPE_NAME: &str = r"\\.\pipe\quickshare";
-const BUFFER_SIZE: usize = 512;
 pub struct IpcServer {
     // upon message recieve, this is where we forward them
     sender: channel::Sender<String>,

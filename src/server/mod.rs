@@ -1,30 +1,25 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{
-        Arc, RwLock,
-        mpsc::{Receiver, Sender},
-    },
+    sync::{Arc, RwLock, mpsc::Sender},
 };
 
-use actix_files::NamedFile;
-use actix_web::{
-    App, HttpRequest, HttpResponse, HttpServer,
-    dev::ServerHandle,
-    error::HttpError,
-    http::header::{ContentDisposition, DispositionParam, DispositionType},
-    web,
+use axum::{
+    Router,
+    extract::{Path, State},
+    http::{StatusCode, header},
+    response::{Html, IntoResponse, Response},
+    routing::get,
 };
-
 use rand::{RngExt, distr::Alphanumeric};
+use tokio::net::TcpListener;
+use tokio_util::io::ReaderStream;
 
 use crate::util::get_local_ip;
 
 pub struct FileServer {
     pub files: Arc<RwLock<FileMap>>,
     pub port: u16,
-    handle: Option<ServerHandle>,
-    // receiver end of the channel whose sender lives inside ipc_server
     r_filename: Option<crossbeam::channel::Receiver<String>>,
 }
 
@@ -53,19 +48,14 @@ impl FileServer {
         port: u16,
     ) -> FileServer {
         let files = Arc::new(RwLock::new(get_files_from_filenames(file_names)));
-
-        // create the channel that connects IpcServer → FileServer
-
         FileServer {
             files,
             port,
-            handle: None,
-            r_filename: r_filename,
+            r_filename,
         }
     }
 
     pub fn listen_file_change(&mut self, s_qrgen_new_address: Sender<String>) {
-        // take the receiver out so it can be moved into the actix thread
         let r_filename = self
             .r_filename
             .take()
@@ -89,7 +79,7 @@ impl FileServer {
                         port,
                         generated_filename
                     ),
-                    _ => format!("http://{}:{}", get_local_ip().unwrap(), port,),
+                    _ => format!("http://{}:{}", get_local_ip().unwrap(), port),
                 };
 
                 let _ = s_qrgen_new_address.send(full_url);
@@ -97,50 +87,43 @@ impl FileServer {
         });
     }
 
+    // Blocking: spins up its own current-thread runtime, returns when the server stops.
     pub fn start(&mut self, r_stop: crossbeam::channel::Receiver<bool>) -> std::io::Result<()> {
-        let app_state = web::Data::new(self.files.clone());
+        let files = self.files.clone();
         let port = self.port;
 
-        // channel to get the server handle back from the thread
-        let (tx, rx) = std::sync::mpsc::channel();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
 
-        let sys = actix_rt::System::new();
-        sys.block_on(async move {
-            let server = HttpServer::new(move || {
-                App::new()
-                    .app_data(app_state.clone())
-                    .route("/", web::get().to(list_files))
-                    .route("/{id}", web::get().to(download_file))
-            })
-            .bind(("0.0.0.0", port))
-            .unwrap()
-            .run();
+        rt.block_on(async move {
+            let app = Router::new()
+                .route("/", get(list_files))
+                .route("/{id}", get(download_file))
+                .with_state(files);
 
-            let handle = server.handle();
-            tx.send(handle.clone()).unwrap(); // send handle back before blocking
+            let listener = TcpListener::bind(("0.0.0.0", port)).await?;
+            println!("Listening on 0.0.0.0:{}", port);
 
-            actix_rt::spawn(async move {
-                if let Ok(graceful) = r_stop.recv() {
-                    handle.stop(graceful).await;
-                }
-            });
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    // r_stop is a sync crossbeam receiver; bridge it to async via spawn_blocking.
+                    tokio::task::spawn_blocking(move || {
+                        let _ = r_stop.recv(); // blocks until QrGen sends the stop signal
+                    })
+                    .await
+                    .ok();
+                })
+                .await?;
 
-            server.await.unwrap();
-        });
+            Ok::<(), std::io::Error>(())
+        })?;
 
-        // block until we get the handle, then return
-        self.handle = Some(rx.recv().unwrap());
         Ok(())
-    }
-
-    pub async fn stop(&self) {
-        if let Some(handle) = &self.handle {
-            handle.stop(true).await;
-        }
     }
 }
 
-async fn list_files(files: web::Data<Arc<RwLock<FileMap>>>) -> HttpResponse {
+async fn list_files(State(files): State<Arc<RwLock<FileMap>>>) -> Html<String> {
     let mut body = String::from(
         "<!doctype html>
         <html>
@@ -164,24 +147,18 @@ async fn list_files(files: web::Data<Arc<RwLock<FileMap>>>) -> HttpResponse {
     }
 
     body.push_str("</ul></body></html>");
-
-    HttpResponse::Ok()
-        .content_type("text/html; charset=utf-8")
-        .body(body)
+    Html(body)
 }
 
 async fn download_file(
-    req: HttpRequest,
-    file_id: web::Path<String>,
-    files: web::Data<Arc<RwLock<FileMap>>>,
-) -> Result<HttpResponse, HttpError> {
-    let id = file_id.into_inner();
-
+    Path(id): Path<String>,
+    State(files): State<Arc<RwLock<FileMap>>>,
+) -> Response {
     let file_path = {
         let files = files.read().unwrap();
         match files.get(&id) {
             Some(f) => f.clone(),
-            None => return Ok(HttpResponse::NotFound().finish()),
+            None => return StatusCode::NOT_FOUND.into_response(),
         }
     };
 
@@ -191,14 +168,20 @@ async fn download_file(
         .to_string_lossy()
         .to_string();
 
-    match NamedFile::open(&file_path) {
-        Ok(named_file) => Ok(named_file
-            .set_content_disposition(ContentDisposition {
-                disposition: DispositionType::Attachment,
-                parameters: vec![DispositionParam::Filename(filename)],
-            })
-            .use_last_modified(false)
-            .into_response(&req)),
-        _ => Ok(HttpResponse::NotFound().finish()),
+    match tokio::fs::File::open(&file_path).await {
+        Ok(file) => {
+            let stream = ReaderStream::new(file);
+            let body = axum::body::Body::from_stream(stream);
+
+            Response::builder()
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}\"", filename),
+                )
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .body(body)
+                .unwrap()
+        }
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
