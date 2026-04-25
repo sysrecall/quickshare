@@ -12,10 +12,18 @@ use axum::{
     routing::get,
 };
 use rand::{RngExt, distr::Alphanumeric};
+use std::net::UdpSocket;
 use tokio::net::TcpListener;
 use tokio_util::io::ReaderStream;
 
-use crate::util::get_local_ip;
+pub fn get_local_ip() -> Option<String> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    match socket.local_addr() {
+        Ok(addr) => Some(addr.ip().to_string()),
+        Err(_) => None,
+    }
+}
 
 pub struct FileServer {
     pub files: Arc<RwLock<FileMap>>,
@@ -128,10 +136,20 @@ async fn list_files(State(files): State<Arc<RwLock<FileMap>>>) -> Html<String> {
                 body { font-family: sans-serif; padding: 20px; }
                 ul { list-style: none; padding: 0; }
                 li { margin: 8px 0; }
-            </style>
+                button { padding: 6px; }
+          </style>
+          <script>
+            function downloadAll() {
+               	let fileElements = document.querySelectorAll(\"li > a\");
+                fileElements.forEach((fe, i) => {
+                    setTimeout(() => fe.click(), i * 500);
+                });
+            }
+        </script>
         </head>
         <body>
             <h1>Shared files</h1>
+            <button onClick=\"downloadAll()\">Download All</button>
             <ul>",
     );
 

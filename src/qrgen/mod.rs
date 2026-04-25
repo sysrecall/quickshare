@@ -1,10 +1,7 @@
 use image::Luma;
 use qrcode::{QrCode, types::QrError};
 use show_image::{ImageInfo, ImageView, WindowOptions, WindowProxy, create_window};
-use std::sync::{
-    Arc, Mutex,
-    mpsc::{Receiver, Sender},
-};
+use std::sync::{Arc, Mutex, mpsc::Receiver};
 
 pub struct QrGen {
     code: Arc<Mutex<QrCode>>,
@@ -35,7 +32,7 @@ impl QrGen {
     }
 
     // listen to regen requests
-    fn listen_change(&mut self) {
+    fn listen_code_change(&mut self) {
         let window = self
             .window
             .as_ref()
@@ -97,7 +94,7 @@ impl QrGen {
         self.window = Some(window.clone());
 
         // listen for regen request
-        self.listen_change();
+        self.listen_code_change();
 
         // blocking
         // window events

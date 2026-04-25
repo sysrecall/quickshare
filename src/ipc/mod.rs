@@ -45,6 +45,7 @@ impl IpcServer {
                         Ok(_) => {
                             let msg = line.trim_end_matches(['\n', '\r']).to_string();
                             eprintln!("[server] received: {msg}");
+
                             if let Err(e) = sender.send(msg) {
                                 eprintln!("Channel send failed: {e}");
                             }
@@ -71,7 +72,9 @@ impl IpcClient {
     pub fn send(&self, path: PathBuf) -> JoinHandle<()> {
         tokio::spawn(async move {
             let conn = {
+                // try to send path until deadline
                 let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+
                 loop {
                     match SendPipeStream::<pipe_mode::Bytes>::connect_by_path(PIPE_NAME).await {
                         Ok(c) => break c,
@@ -88,6 +91,7 @@ impl IpcClient {
 
             let mut conn = conn;
             let mut message = path.as_os_str().as_encoded_bytes().to_vec();
+
             message.push(b'\n');
             conn.write_all(&message).await.unwrap();
             conn.shutdown().await.unwrap();

@@ -7,12 +7,12 @@ use std::sync::mpsc::channel;
 
 use qrgen::QrGen;
 use server::FileServer;
-use util::get_local_ip;
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::core::w;
 
 use crate::ipc::{IpcClient, IpcServer};
+use crate::server::get_local_ip;
 
 mod ipc;
 mod qrgen;
@@ -86,7 +86,6 @@ async fn run() {
         }
     });
 
-    // start() is blocking, so it needs spawn_blocking
     tokio::spawn(async move {
         println!("starting server at: {}", root_address);
         server.listen_file_change(s_new_address);
