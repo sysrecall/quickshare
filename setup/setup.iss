@@ -3,7 +3,7 @@
 ; Non-commercial use only
 
 #define MyAppName "quickshare"
-#define MyAppVersion "0.3.0"
+#define MyAppVersion "0.3.1"
 #define MyAppPublisher "sysrecall"
 #define MyAppExeName "quickshare.exe"
 

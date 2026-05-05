@@ -138,18 +138,9 @@ async fn list_files(State(files): State<Arc<RwLock<FileMap>>>) -> Html<String> {
                 li { margin: 8px 0; }
                 button { padding: 6px; }
           </style>
-          <script>
-            function downloadAll() {
-               	let fileElements = document.querySelectorAll(\"li > a\");
-                fileElements.forEach((fe, i) => {
-                    setTimeout(() => fe.click(), i * 500);
-                });
-            }
-        </script>
         </head>
         <body>
             <h1>Shared files</h1>
-            <button onClick=\"downloadAll()\">Download All</button>
             <ul>",
     );
 
