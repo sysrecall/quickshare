@@ -33,7 +33,7 @@ Once installed, **QuickShare integrates into the Windows context menu**.
 ## Usage
 
 1. **Right click** on one or more files in Windows Explorer.
-2. Click **QuickShare → Share**.
+2. Click **Share with quickshare**.
 3. A window will open showing:
    - A **QR code**
    - A **local network URL**
