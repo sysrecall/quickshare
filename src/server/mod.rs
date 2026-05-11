@@ -17,7 +17,7 @@ use tokio::net::TcpListener;
 use tokio_util::io::ReaderStream;
 
 pub fn get_local_ip() -> Option<String> {
-    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    let socket = UdpSocket::bind("127.0.0.1:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     match socket.local_addr() {
         Ok(addr) => Some(addr.ip().to_string()),
