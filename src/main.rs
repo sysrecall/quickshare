@@ -25,14 +25,17 @@ fn main() {
 
 #[tokio::main]
 async fn run() {
-    // single file
+    // opening the application while selecting multiple files opens the an instance for each file
+    // this is the default behaviour of windows context menu, so we only parse single file for now
+
+    // parse single file path from arguments, ignore rest if given
     let path = PathBuf::from(&env::args().skip(1).next().expect("No file provided!"));
     if !path.exists() {
         eprintln!("File does not exist: {:?}", path);
         std::process::exit(1);
     }
 
-    // try to create mutex
+    // try to create a named mutex on windows
     // hold mutex guard
     let _mutex_guard = unsafe {
         let mutex = CreateMutexW(None, true, w!("quickshare_mutex")).unwrap_or_else(|e| {
@@ -40,6 +43,7 @@ async fn run() {
             std::process::exit(1);
         });
 
+        // an app instance already holds the mutex, send file path to the instance via IPC client
         if GetLastError() == ERROR_ALREADY_EXISTS {
             let ipc_client = IpcClient::new();
             let handle = ipc_client.send(path.clone());
@@ -52,20 +56,23 @@ async fn run() {
         mutex
     };
 
-    // create an ipc server
+    // this is the first instance of the app
+    // create an IPC server and start listening for incoming filepaths
     let mut ipc_server = IpcServer::new();
     let ipc_receiver = ipc_server.receiver.clone();
 
+    // init stop signal channel and new address channel
     let (s_stop, r_stop) = unbounded::<bool>();
     let (s_new_address, r_new_address) = channel::<String>();
 
     // start listening
     // setup server config
     const PORT: u16 = 3000;
-    let mut server = FileServer::new(vec![path], Some(ipc_receiver), PORT); // creating a vec on the fly
+    // create vec on the fly, since we only care about the first file
+    let mut server = FileServer::new(vec![path], Some(ipc_receiver), PORT);
     let root_address = format!("http://{}:{}", get_local_ip().unwrap(), PORT);
 
-    // generate qr code
+    // generate qr code for the file/s
     let mut qrgen = match server.files.read().unwrap().len() {
         1 => {
             let files = server.files.read().unwrap();
@@ -79,6 +86,7 @@ async fn run() {
         _ => QrGen::create(root_address.as_ref(), s_stop, Some(r_new_address)).unwrap(),
     };
 
+    // start listening on the IPC server
     tokio::spawn(async move {
         if ipc_server.listen().await.is_err() {
             eprintln!("error starting IPC server, exiting...");
@@ -86,6 +94,7 @@ async fn run() {
         }
     });
 
+    // start listening to file changes on the server
     tokio::spawn(async move {
         println!("starting server at: {}", root_address);
         server.listen_file_change(s_new_address);

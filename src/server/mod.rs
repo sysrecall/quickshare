@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::{Arc, RwLock, mpsc::Sender},
 };
@@ -11,13 +12,17 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::get,
 };
+
 use rand::{RngExt, distr::Alphanumeric};
 use std::net::UdpSocket;
 use tokio::net::TcpListener;
 use tokio_util::io::ReaderStream;
 
+const LOCAL_NETWORK_ADDRESS: SocketAddr =
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0);
+
 pub fn get_local_ip() -> Option<String> {
-    let socket = UdpSocket::bind("127.0.0.1:0").ok()?;
+    let socket = UdpSocket::bind(LOCAL_NETWORK_ADDRESS).ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     match socket.local_addr() {
         Ok(addr) => Some(addr.ip().to_string()),
