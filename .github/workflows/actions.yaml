@@ -46,7 +46,7 @@ jobs:
 
       - name: Compile installer
         run: |
-          ISCC.exe ".\setup\setup.iss"
+          ISCC.exe /DMyAppVersion=${{ steps.version.outputs.VERSION }} ".\setup\setup.iss"
 
       - name: Upload artifacts to release
         uses: softprops/action-gh-release@v2
