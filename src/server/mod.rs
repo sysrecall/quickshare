@@ -2,7 +2,8 @@ use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
-    sync::{Arc, RwLock, mpsc::Sender},
+    sync::{Arc, RwLock, atomic::{AtomicBool, Ordering}, mpsc::Sender},
+    time::Duration,
 };
 
 use axum::{
@@ -68,7 +69,11 @@ impl FileServer {
         }
     }
 
-    pub fn listen_file_change(&mut self, s_qrgen_new_address: Sender<String>) {
+    pub fn listen_file_change(
+        &mut self,
+        s_qrgen_new_address: Sender<String>,
+        is_stopping: Arc<AtomicBool>,
+    ) {
         let r_filename = self
             .r_filename
             .take()
@@ -77,7 +82,12 @@ impl FileServer {
         let port = self.port;
 
         tokio::task::spawn_blocking(move || {
-            while let Ok(filename) = r_filename.recv() {
+            while !is_stopping.load(Ordering::Relaxed) {
+                let filename = match r_filename.recv_timeout(Duration::from_millis(100)) {
+                    Ok(filename) => filename,
+                    Err(crossbeam::channel::RecvTimeoutError::Timeout) => continue,
+                    Err(crossbeam::channel::RecvTimeoutError::Disconnected) => break,
+                };
                 let generated_filename = generate_filename();
                 let filepath = PathBuf::from(filename.trim());
                 files
@@ -85,14 +95,14 @@ impl FileServer {
                     .unwrap()
                     .insert(generated_filename.clone(), filepath);
 
+                let Some(local_ip) = get_local_ip() else {
+                    eprintln!("Unable to determine local IP address; QR code was not updated");
+                    continue;
+                };
+
                 let full_url = match files.read().unwrap().len() {
-                    1 => format!(
-                        "http://{}:{}/{}",
-                        get_local_ip().unwrap(),
-                        port,
-                        generated_filename
-                    ),
-                    _ => format!("http://{}:{}", get_local_ip().unwrap(), port),
+                    1 => format!("http://{}:{}/{}", local_ip, port, generated_filename),
+                    _ => format!("http://{}:{}", local_ip, port),
                 };
 
                 let _ = s_qrgen_new_address.send(full_url);
@@ -108,6 +118,7 @@ impl FileServer {
         &mut self,
         listener: TcpListener,
         r_stop: crossbeam::channel::Receiver<bool>,
+        is_stopping: Arc<AtomicBool>,
     ) -> std::io::Result<()> {
         let files = self.files.clone();
 
@@ -123,6 +134,7 @@ impl FileServer {
                 // r_stop is a sync crossbeam receiver; bridge it to async via spawn_blocking.
                 tokio::task::spawn_blocking(move || {
                     let _ = r_stop.recv(); // blocks until QrGen sends the stop signal
+                    is_stopping.store(true, Ordering::Relaxed);
                 })
                 .await
                 .ok();

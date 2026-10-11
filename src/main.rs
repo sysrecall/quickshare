@@ -3,7 +3,7 @@
 use crossbeam::channel::unbounded;
 use std::env;
 use std::path::PathBuf;
-use std::sync::mpsc::channel;
+use std::sync::{Arc, atomic::AtomicBool, mpsc::channel};
 
 use qrgen::QrGen;
 use server::FileServer;
@@ -17,7 +17,6 @@ use crate::server::get_local_ip;
 mod ipc;
 mod qrgen;
 mod server;
-mod util;
 
 fn main() {
     show_image::run_context(|| run());
@@ -77,7 +76,12 @@ async fn run() {
             return;
         }
     };
-    let root_address = format!("http://{}:{}", get_local_ip().unwrap(), PORT);
+    let Some(local_ip) = get_local_ip() else {
+        eprintln!("Unable to determine local IP address");
+        return;
+    };
+    let root_address = format!("http://{}:{}", local_ip, PORT);
+    let is_stopping = Arc::new(AtomicBool::new(false));
 
     // generate qr code for the file/s
     let mut qrgen = match server.files.read().unwrap().len() {
@@ -104,8 +108,8 @@ async fn run() {
     // start listening to file changes on the server
     tokio::spawn(async move {
         println!("starting server at: {}", root_address);
-        server.listen_file_change(s_new_address);
-        if let Err(error) = server.start(listener, r_stop).await {
+        server.listen_file_change(s_new_address, is_stopping.clone());
+        if let Err(error) = server.start(listener, r_stop, is_stopping).await {
             eprintln!("File server stopped: {error}");
         }
     });

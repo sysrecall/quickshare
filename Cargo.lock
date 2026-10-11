@@ -1945,12 +1945,9 @@ dependencies = [
  "interprocess",
  "qrcode",
  "rand 0.10.0",
- "serde",
  "show-image",
  "tokio",
  "tokio-util",
- "tower",
- "tower-http",
  "windows 0.62.2",
 ]
 
