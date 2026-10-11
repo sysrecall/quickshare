@@ -6,17 +6,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, atomic::AtomicBool, mpsc::channel};
 
 use qrgen::QrGen;
-use server::FileServer;
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::core::w;
 
 use crate::ipc::{IpcClient, IpcServer};
-use crate::server::get_local_ip;
+use quickshare::server::{FileServer, get_local_ip};
 
 mod ipc;
 mod qrgen;
-mod server;
 
 fn main() {
     show_image::run_context(|| run());

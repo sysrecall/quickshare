@@ -2,7 +2,11 @@ use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
-    sync::{Arc, RwLock, atomic::{AtomicBool, Ordering}, mpsc::Sender},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+        mpsc::Sender,
+    },
     time::Duration,
 };
 
@@ -122,10 +126,7 @@ impl FileServer {
     ) -> std::io::Result<()> {
         let files = self.files.clone();
 
-        let app = Router::new()
-            .route("/", get(list_files))
-            .route("/{id}", get(download_file))
-            .with_state(files);
+        let app = router(files);
 
         println!("Listening on {}", listener.local_addr()?);
 
@@ -143,6 +144,13 @@ impl FileServer {
 
         Ok(())
     }
+}
+
+pub fn router(files: Arc<RwLock<FileMap>>) -> Router {
+    Router::new()
+        .route("/", get(list_files))
+        .route("/{id}", get(download_file))
+        .with_state(files)
 }
 
 async fn list_files(State(files): State<Arc<RwLock<FileMap>>>) -> Html<String> {
@@ -206,5 +214,36 @@ async fn download_file(
                 .unwrap()
         }
         Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_names_are_twelve_alphanumeric_characters() {
+        for _ in 0..100 {
+            let name = generate_filename();
+            assert_eq!(name.len(), 12);
+            assert!(
+                name.chars()
+                    .all(|character| character.is_ascii_alphanumeric())
+            );
+        }
+    }
+
+    #[test]
+    fn new_server_registers_every_file() {
+        let server = FileServer::new(
+            vec![PathBuf::from("one.txt"), PathBuf::from("two.txt")],
+            None,
+            3000,
+        );
+
+        let files = server.files.read().unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files.values().any(|path| *path == PathBuf::from("one.txt")));
+        assert!(files.values().any(|path| *path == PathBuf::from("two.txt")));
     }
 }
