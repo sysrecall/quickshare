@@ -100,20 +100,23 @@ impl FileServer {
         });
     }
 
+    pub async fn bind(&self) -> std::io::Result<TcpListener> {
+        TcpListener::bind(("0.0.0.0", self.port)).await
+    }
+
     pub async fn start(
         &mut self,
+        listener: TcpListener,
         r_stop: crossbeam::channel::Receiver<bool>,
     ) -> std::io::Result<()> {
         let files = self.files.clone();
-        let port = self.port;
 
         let app = Router::new()
             .route("/", get(list_files))
             .route("/{id}", get(download_file))
             .with_state(files);
 
-        let listener = TcpListener::bind(("0.0.0.0", port)).await?;
-        println!("Listening on 0.0.0.0:{}", port);
+        println!("Listening on {}", listener.local_addr()?);
 
         axum::serve(listener, app)
             .with_graceful_shutdown(async move {

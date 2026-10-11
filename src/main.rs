@@ -70,6 +70,13 @@ async fn run() {
     const PORT: u16 = 3000;
     // create vec on the fly, since we only care about the first file
     let mut server = FileServer::new(vec![path], Some(ipc_receiver), PORT);
+    let listener = match server.bind().await {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("Failed to start file server on port {PORT}: {error}");
+            return;
+        }
+    };
     let root_address = format!("http://{}:{}", get_local_ip().unwrap(), PORT);
 
     // generate qr code for the file/s
@@ -98,7 +105,9 @@ async fn run() {
     tokio::spawn(async move {
         println!("starting server at: {}", root_address);
         server.listen_file_change(s_new_address);
-        server.start(r_stop).await.unwrap();
+        if let Err(error) = server.start(listener, r_stop).await {
+            eprintln!("File server stopped: {error}");
+        }
     });
 
     // show window
